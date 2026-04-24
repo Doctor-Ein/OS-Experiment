@@ -1,0 +1,49 @@
+Lab 3 Thread Report
+
+1) uthread
+- Implemented thread context in user/uthread.c with callee-saved registers:
+  ra, sp, s0-s11.
+- Implemented thread_create():
+  - allocate FREE thread slot
+  - set RUNNABLE
+  - initialize context.ra to function entry
+  - initialize context.sp to top of thread stack
+- Implemented thread_schedule():
+  - call thread_switch(&old->context, &new->context)
+- Implemented user/uthread_switch.S:
+  - save old thread callee-saved registers
+  - restore new thread callee-saved registers
+  - ret to restored ra
+
+2) ph_safe + ph_fast
+- Added per-bucket mutex array in notxv6/ph.c.
+- Initialized all bucket mutexes in main().
+- Locked corresponding bucket in put() around search/update/insert.
+- Locked corresponding bucket in get() around traversal.
+- Result:
+  - ph_safe: no missing keys with 2 threads.
+  - ph_fast: finer-grained locking enables parallel puts across different buckets.
+
+3) barrier
+- Implemented reusable barrier in notxv6/barrier.c using:
+  - mutex + condition variable
+  - round counter (bstate.round)
+  - arrival counter (bstate.nthread)
+- Logic:
+  - each thread records current round and increments arrival count
+  - last arriving thread increments round, resets arrival count, broadcasts
+  - other threads wait in while-loop until round changes
+- This avoids spurious wakeup issues and supports multiple rounds.
+
+4) Configuration
+- Set conf/lab.mk to LAB=thread.
+
+5) Files modified
+- conf/lab.mk
+- user/uthread.c
+- user/uthread_switch.S
+- notxv6/ph.c
+- notxv6/barrier.c
+- answers-thread.txt
+- lab-thread-report.txt
+- report.txt

@@ -1,0 +1,119 @@
+Lab1: util + syscall 实验报告
+
+----------------------------------------
+1. 完成情况
+----------------------------------------
+
+本次实验包含 4 个部分：
+1) sleep
+2) pingpong
+3) trace 系统调用
+4) sysinfo 系统调用
+
+目前 4 部分都已完成，最终评分结果为 80/80。
+
+----------------------------------------
+2. 主要实现
+----------------------------------------
+
+sleep:
+- 解析参数后调用 sleep()。
+
+pingpong:
+- 使用两个 pipe，让父子进程做双向单字节通信。
+
+trace:
+- 增加 trace 系统调用和用户态接口。
+- 在 syscall 返回后，按 mask 打印系统调用名和返回值。
+- fork 时让子进程继承 tracemask。
+
+sysinfo:
+- 增加 sysinfo 系统调用。
+- freemem：统计空闲页总字节数。
+- nproc：统计非 UNUSED 的进程数。
+- 通过 copyout 把 struct sysinfo 返回给用户态。
+
+----------------------------------------
+3. 代码改动
+----------------------------------------
+
+用户态与构建：
+- Makefile
+- user/user.h
+- user/usys.pl
+- user/trace.c
+- user/pingpong.c
+
+内核态：
+- kernel/defs.h
+- kernel/proc.h
+- kernel/proc.c
+- kernel/syscall.c
+- kernel/sysproc.c
+- kernel/kalloc.c
+
+报告：
+- lab-util-syscall-report.txt
+
+----------------------------------------
+4. 核心问题与排查发现
+----------------------------------------
+
+最开始我的环境是：macOS 上先用 QEMU 跑 Ubuntu20，再在 Ubuntu 里用 QEMU 跑 xv6。当时 trace_children 这个测试点经常不过。我先怀疑是双层模拟带来的性能损耗，影响了 forkforkfork 用例时序。为了提高稳定性，我尝试过把 usertests 里的 sleep 时间拉长。这个改动有时能过，但保持原本设定时，成绩常见是 75/80。为了确认是不是纯性能问题，我把环境迁移到了云服务器 Ubuntu20，直接运行 xv6，减少一层嵌套。迁移后其他测试点整体快了很多，但 trace_children 仍出现失败，说明问题不只是机器性能。
+
+继续排查后，真正原因在 trace.c。之前为了减轻本地测试时的性能需求，在 trace 用户程序里加过一段额外的 fork/wait 逻辑，这会打乱测试期望的 fork 跟踪输出顺序。最终把 trace.c 恢复成标准流程（参数检查 -> trace(mask) -> exec 目标命令）。去掉这段额外 fork 后，trace_children 稳定通过，最终成绩 80/80。
+
+----------------------------------------
+5. 实验结果对比（两次实测）
+----------------------------------------
+
+结果一：未改回标准 trace.c 逻辑（75/80）
+
+ubuntu@VM-32-57-ubuntu:~/OS-Experiment$ ./grade-lab-util-syscall
+make: 'kernel/kernel' is up to date.
+== Test sleep, no arguments == sleep, no arguments: OK (1.7s)
+== Test sleep, returns == sleep, returns: OK (0.8s)
+== Test sleep, makes syscall == sleep, makes syscall: OK (0.9s)
+== Test pingpong == pingpong: OK (1.2s)
+== Test lab-util-syscall-report.txt ==
+lab-util-syscall-report.txt: OK
+== Test trace 32 grep == trace 32 grep: OK (1.0s)
+== Test trace all grep == trace all grep: OK (0.8s)
+== Test trace nothing == trace nothing: OK (2.1s)
+== Test trace children == trace children: FAIL (16.3s)
+	...
+		 10: syscall fork -> -1
+		 OK
+		 3: syscall fork -> 67
+		 ALL TESTS PASSED
+		 $ qemu-system-riscv64: terminating on signal 15 from pid 27954 (make)
+	MISSING '^5: syscall fork -> \d+'
+	QEMU output saved to xv6.out.trace_children
+== Test sysinfotest == sysinfotest: OK (3.6s)
+Score: 75/80
+ubuntu@VM-32-57-ubuntu:~/OS-Experiment$
+
+结果二：改回标准 trace.c 逻辑（80/80）
+
+ubuntu@VM-32-57-ubuntu:~/OS-Experiment$ ./grade-lab-util-syscall
+make: 'kernel/kernel' is up to date.
+== Test sleep, no arguments == sleep, no arguments: OK (2.1s)
+== Test sleep, returns == sleep, returns: OK (1.1s)
+== Test sleep, makes syscall == sleep, makes syscall: OK (1.0s)
+== Test pingpong == pingpong: OK (0.8s)
+== Test lab-util-syscall-report.txt ==
+lab-util-syscall-report.txt: OK
+== Test trace 32 grep == trace 32 grep: OK (1.2s)
+== Test trace all grep == trace all grep: OK (1.1s)
+== Test trace nothing == trace nothing: OK (0.8s)
+== Test trace children == trace children: OK (16.2s)
+	(Old xv6.out.trace_children failure log removed)
+== Test sysinfotest == sysinfotest: OK (3.6s)
+Score: 80/80
+ubuntu@VM-32-57-ubuntu:~/OS-Experiment$
+
+----------------------------------------
+6. 收获
+----------------------------------------
+
+这次实验最大的收获有三点：（1）直观感受到了多层模拟嵌套对性能和时序稳定性的影响。（2) 排查问题时要区分“环境因素”和“代码逻辑因素”，最终要回到代码本身做确认。（3）排查过程让我，对我做的改动理解更深刻，哪里有显著的性能影响等，更清楚了。

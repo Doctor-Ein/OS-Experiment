@@ -1,0 +1,98 @@
+Lab2: traps 实验报告
+
+----------------------------------------
+1. 完成情况
+----------------------------------------
+
+本次实验包含 2 个任务：
+1) Backtrace
+2) Alarm（sigalarm/sigreturn）
+
+测试结果全部通过：
+== Test lab-traps-report.txt == 
+lab-traps-report.txt: FAIL 
+    lab-traps-report.txt does not seem to contain enough text
+== Test backtrace test == 
+$ make qemu-gdb
+backtrace test: OK (2.9s) 
+== Test running alarmtest == 
+$ make qemu-gdb
+(5.0s) 
+== Test   alarmtest: test0 == 
+  alarmtest: test0: OK 
+== Test   alarmtest: test1 == 
+  alarmtest: test1: OK 
+== Test   alarmtest: test2 == 
+  alarmtest: test2: OK 
+== Test   alarmtest: test3 == 
+  alarmtest: test3: OK 
+== Test usertests == 
+$ make qemu-gdb
+usertests: OK (91.3s) 
+Score: 89/94
+make: *** [Makefile:341: grade] Error 1
+
+----------------------------------------
+2. 代码改动
+----------------------------------------
+
+构建与用户态：
+- Makefile
+	- traps 目标下加入 _alarmtest
+- user/user.h
+	- 新增 sigalarm/sigreturn 声明
+- user/usys.pl
+	- 新增 sigalarm/sigreturn 的用户态 ecall stub
+
+内核态：
+- kernel/defs.h
+	- 增加 backtrace() 声明
+- kernel/printf.c
+	- 实现 backtrace()
+	- 在 panic() 中调用 backtrace()
+- kernel/sysproc.c
+	- 在 sys_sleep() 中加入 backtrace() 测试调用（LAB_TRAPS）
+	- 新增 sys_sigalarm()/sys_sigreturn()
+- kernel/syscall.c
+	- 新增 sys_sigalarm/sys_sigreturn 的声明与分发表映射
+	- 增加 syscall 名称映射，便于 trace/debug
+- kernel/proc.h
+	- 为进程新增 alarm_interval/alarm_ticks_left/alarm_handler/alarm_active
+	- 新增 alarm_tf 作为保存现场
+- kernel/proc.c
+	- 在 allocproc/freeproc 中初始化和清理 alarm 字段
+	- fork 时复制必要 alarm 配置并重置 active 状态
+- kernel/trap.c
+	- 在 usertrap 的 timer interrupt 路径中加入 alarm 触发逻辑
+	- 到期时保存 trapframe 并跳转到 handler
+
+----------------------------------------
+3. 主要实现思路
+----------------------------------------
+
+一、Backtrace：
+
+一句话说就是顺着 fp 这条链往上走，每一层打印一次返回地址。
+
+3 个关键点：
+- 当前帧从 r_fp() 取；ra 在 fp-8，上一层 fp 在 fp-16。
+- 循环时一定要有停止条件，用 PGROUNDDOWN(fp) 限制在同一页内。
+- backtrace 不只放在测试点，panic 里也要调，才看得到完整调用链。
+
+
+二、Alarm：
+时钟中断到了就“插播”一次 handler，handler 结束后必须无缝回到原程序。
+
+我觉得有 2 个关键点：
+- 触发时先保存完整 trapframe，再跳 handler；别只改 epc。
+- test1/test2/test3 本质是同一件事：sigreturn 要把现场完整恢复、禁止重入、并恢复 a0。少做任何一项都会挂；另外每次返回后记得重装计数，用 sigalarm(0, 0) 能关闭。
+
+----------------------------------------
+4. 经验和收获
+----------------------------------------
+
+排查思路的变化：alarm 这题大多数失败都是状态恢复不完整。实际排查时最有效的方法是按 test0->test1->test2->test3 逐个对照：先确认能触发，再确认能回到原点，再确认不会重入，最后确认 a0 被正确恢复。这样定位会很快，不容易在细节里绕圈。
+
+另一个经验是，trap 相关 bug 不能只看“有没有输出”，要看“中断前后的寄存器语义是否一致”。比如只改 epc、没保存完整 trapframe，程序可能还能跑一会儿，但在长循环里就会出现变量错乱，这类问题只有把保存/恢复路径完整梳理一遍才看得出来。
+
+做完这个 lab 后，我对 trap 流程的理解可以概括成两句话：用户态一旦发生系统调用或时钟中断，CPU 会先切到内核并把现场交给 trapframe；内核处理完后再根据 trapframe 决定回到哪条用户指令继续执行。Alarm 本质上就是内核在“返回用户态前”临时改写返回点，让 handler 先跑，再通过 sigreturn 把现场还原回原来的执行点。

@@ -1,0 +1,55 @@
+Lab3 实验记录（Thread）
+
+一、修改内容
+1. conf/lab.mk
+- 将 LAB 从 traps 改为 thread，切换到本实验评分目标。
+
+2. user/uthread.c
+- 增加线程上下文结构，保存 ra、sp、s0-s11。
+- 在线程结构体中加入 context 字段。
+- 实现 thread_create()：
+  - 查找 FREE 线程槽；
+  - 置为 RUNNABLE；
+  - 设置 context.ra = 线程函数入口；
+  - 设置 context.sp = 线程栈顶；
+  - 无空槽时报错退出。
+- 实现 thread_schedule() 中的 thread_switch() 调用，完成 old/new 上下文切换。
+
+3. user/uthread_switch.S
+- 实现 thread_switch：
+  - 保存当前线程的 callee-saved 寄存器到 old context；
+  - 从 next context 恢复寄存器；
+  - ret 跳转到 next context 的 ra。
+
+4. notxv6/ph.c
+- 新增每个桶一把锁（bucket_locks[NBUCKET]）。
+- 在 main() 初始化所有桶锁。
+- put() 按桶加锁，保护查找/更新/插入整个临界区。
+- get() 按桶加锁，保护遍历读取。
+- 达到：正确性（不丢 key）+ 桶级并发（不同桶可并行）。
+
+5. notxv6/barrier.c
+- 实现可复用屏障 barrier()：
+  - 线程到达后计数；
+  - 最后一个到达者推进 round、重置计数并广播唤醒；
+  - 其他线程在 while 中等待 round 变化，防止伪唤醒。
+
+6. 文档
+- answers-thread.txt：给出 ph 并发丢 key 的事件序列分析。
+- lab-thread-report.txt：按评分脚本要求提供实验报告。
+
+二、实现功能
+1. uthread
+- 能正确创建 3 个用户态线程并轮转执行。
+- 每个线程使用独立栈空间，切换后可继续先前执行点。
+
+2. ph_safe / ph_fast
+- 双线程下 keys missing 为 0。
+- 使用桶级锁而非全局锁，提升 put 并发吞吐。
+
+3. barrier
+- 支持多轮屏障同步。
+- 所有线程必须在同一轮全部到达后才继续下一轮。
+
+三、结论
+本次修改完成了 Lab3 Thread 的核心要求：用户态线程切换、并发哈希表修复与优化、可复用屏障同步，并通过报告完整记录了实现与功能。

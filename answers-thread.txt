@@ -1,0 +1,27 @@
+Lab3 Thread - Question 2.1: Why keys are missing in ph 2
+
+When two threads call put() concurrently and target the same bucket, the insertion to the head of the linked list is not atomic.
+
+A typical lost-key interleaving:
+1. Initial state: table[i] = H
+2. Thread T1 executes insert(k1,...):
+   - reads current head H
+   - prepares node E1, sets E1->next = H
+   - has not written table[i] yet
+3. Thread T2 executes insert(k2,...):
+   - also reads current head H
+   - prepares node E2, sets E2->next = H
+4. T1 writes table[i] = E1
+5. T2 writes table[i] = E2 (overwrites T1 update)
+
+Now the head is E2 -> H, and E1 is no longer reachable from table[i].
+So key k1 is effectively lost. The same race can happen in many buckets and produce many missing keys.
+
+Root cause:
+- Shared bucket head pointer and linked-list updates are modified without synchronization.
+- put() has a read-modify-write critical section on table[i].
+
+Fix:
+- Protect each bucket with a mutex.
+- Lock before searching/updating/inserting into that bucket and unlock after completion.
+- This preserves correctness and still allows parallel put() on different buckets.
