@@ -1,49 +1,17 @@
-Lab 3 Thread Report
+Lab3: thread 实验报告
 
-1) uthread
-- Implemented thread context in user/uthread.c with callee-saved registers:
-  ra, sp, s0-s11.
-- Implemented thread_create():
-  - allocate FREE thread slot
-  - set RUNNABLE
-  - initialize context.ra to function entry
-  - initialize context.sp to top of thread stack
-- Implemented thread_schedule():
-  - call thread_switch(&old->context, &new->context)
-- Implemented user/uthread_switch.S:
-  - save old thread callee-saved registers
-  - restore new thread callee-saved registers
-  - ret to restored ra
+这次 thread 实验我主要做了三块内容：用户态线程切换（uthread）、并发哈希表（ph）和屏障同步（barrier）。整体感受是，这个实验看起来是“把功能做出来”，但真正难的地方其实是并发语义是否完整，尤其是切换现场和多轮同步这两件事。只要有一个状态没保存好，或者一个计数器在错误时机被复用，程序就会出现很隐蔽的错误。
 
-2) ph_safe + ph_fast
-- Added per-bucket mutex array in notxv6/ph.c.
-- Initialized all bucket mutexes in main().
-- Locked corresponding bucket in put() around search/update/insert.
-- Locked corresponding bucket in get() around traversal.
-- Result:
-  - ph_safe: no missing keys with 2 threads.
-  - ph_fast: finer-grained locking enables parallel puts across different buckets.
+先说 uthread。实现上我在 user/uthread.c 里补全了 thread_create() 和 thread_schedule()，在 user/uthread_switch.S 里实现了 thread_switch。核心思路是只保存/恢复 callee-saved 寄存器（ra、sp、s0-s11），因为线程切换点本质是一次函数调用，caller-saved 按调用约定由调用方负责。thread_create() 里最关键的是把新线程第一次运行需要的上下文搭好：把 ra 指向线程入口函数，把 sp 放到该线程栈顶，这样它被调度时 ret 才能“像正常返回一样”进入线程函数执行。thread_schedule() 里则是找到可运行线程后调用 thread_switch(&old->context, &new->context) 完成上下文切换。
 
-3) barrier
-- Implemented reusable barrier in notxv6/barrier.c using:
-  - mutex + condition variable
-  - round counter (bstate.round)
-  - arrival counter (bstate.nthread)
-- Logic:
-  - each thread records current round and increments arrival count
-  - last arriving thread increments round, resets arrival count, broadcasts
-  - other threads wait in while-loop until round changes
-- This avoids spurious wakeup issues and supports multiple rounds.
+这一部分最容易踩的坑是“程序能跑但行为不对”。例如刚开始如果只关心能切过去，而忽略栈指针和返回地址是否成对恢复，输出会出现线程顺序异常、重复执行或提前退出。后来我把问题拆成两步看：第一步确认是否真的切到了新线程，第二步确认是否能从新线程稳定切回旧线程。这个拆分方法比盯着整段输出更有效，也更容易定位到底是保存错了还是恢复错了。
 
-4) Configuration
-- Set conf/lab.mk to LAB=thread.
+ph 这部分我先做对，再做快。先在 notxv6/ph.c 里完成 ph_safe：给并发访问加互斥，保证 2 线程下 missing keys 为 0。之后做 ph_fast：把锁粒度细化到桶级，而不是全局一把大锁。这样不同桶的 put() 不会互相阻塞，能够真正并行。这里我最大的收获是，锁不是“加上就完了”，而是要明确保护边界。put() 的查找、更新、插入必须在同一临界区里，否则会出现链表头并发覆盖，最终表现为 key 丢失。get() 也需要和对应桶上的 put() 有一致的同步边界，否则读到中间状态会造成结果不稳定。
 
-5) Files modified
-- conf/lab.mk
-- user/uthread.c
-- user/uthread_switch.S
-- notxv6/ph.c
-- notxv6/barrier.c
-- answers-thread.txt
-- lab-thread-report.txt
-- report.txt
+barrier 这部分表面是条件变量的模板题，实际上难点在“可复用”。如果只实现一次性的“人齐了就放行”，第一轮可能通过，第二轮很容易出错。我最终使用了 round 轮次号和到达计数 nthread 的组合：每个线程进入 barrier 时先记录当前 round，再增加到达计数；最后到达的线程负责推进 round、重置计数并 broadcast；其他线程在 while 循环里等待 round 变化后再继续。这种写法可以正确处理虚假唤醒，也能避免线程提前进入下一轮导致计数被错误复用。
+
+实验过程中遇到的另一个实际问题是测试环境而不是代码本身：grade-lab-thread 在跑 uthread 时提示 qemu 无法获得 fs.img 的写锁。这个问题本质上是旧的 qemu 进程没退出，导致镜像文件被占用。处理方式是先清理残留 qemu 进程，再重新执行测试。这个经历也提醒我，并发实验里“环境状态”会放大调试成本，遇到异常先确认是否有后台进程、端口或文件锁冲突，能省很多时间。
+
+总体来看，这次实验让我对“上下文切换”和“同步原语”的理解更具体了。以前对线程切换的理解偏概念化，现在可以明确到寄存器集合、调用约定和首次调度入口的关系；以前觉得 barrier 只是等待机制，现在更关注它在多轮场景里的状态生命周期。对我来说，这次最大的提升不是写了多少代码，而是学会了用“状态是否完整闭环”来检查并发程序：现场有没有完整保存与恢复，计数器有没有在正确轮次内使用，唤醒条件有没有和等待条件严格对应。这个检查框架后面做更复杂的并发题也可以直接复用。
+
+本次实验对应修改文件包括：conf/lab.mk、user/uthread.c、user/uthread_switch.S、notxv6/ph.c、notxv6/barrier.c、answers-thread.txt、lab-thread-report.txt、report.txt。
