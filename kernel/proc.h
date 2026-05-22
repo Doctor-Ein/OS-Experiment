@@ -18,6 +18,10 @@ struct context {
   uint64 s11;
 };
 
+#ifdef LAB_PGTBL
+struct usyscall;
+#endif
+
 // Per-CPU state.
 struct cpu {
   struct proc *proc;          // The process running on this cpu, or null.
@@ -100,6 +104,9 @@ struct proc {
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table
   struct trapframe *trapframe; // data page for trampoline.S
+#ifdef LAB_PGTBL
+  struct usyscall *usyscall;    // shared read-only data for user space
+#endif
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory

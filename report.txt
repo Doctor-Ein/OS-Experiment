@@ -53,3 +53,37 @@ Lab3 实验记录（Thread）
 
 三、结论
 本次修改完成了 Lab3 Thread 的核心要求：用户态线程切换、并发哈希表修复与优化、可复用屏障同步，并通过报告完整记录了实现与功能。
+
+---
+
+Lab5 实验记录（Page Tables）
+
+一、修改内容
+1. conf/lab.mk
+- 将 LAB 设置为 pgtbl，切换到本实验评分目标。
+
+2. kernel/proc.c + kernel/proc.h
+- 为每个进程分配一个 usyscall 共享页，初始化 pid。
+- 在 proc_pagetable() 中将 USYSCALL 映射为用户只读。
+- 在 freeproc()/proc_freepagetable() 中释放与解除映射。
+
+3. kernel/vm.c + kernel/defs.h + kernel/exec.c
+- 实现 vmprint() 递归打印页表。
+- 在 exec() 中对 pid==1 调用 vmprint()。
+
+4. kernel/riscv.h + kernel/sysproc.c
+- 增加 PTE_A 定义。
+- 实现 sys_pgaccess()：检测并清除 Accessed 位。
+
+二、实现功能
+1. ugetpid
+- 用户态直接读取 USYSCALL 共享页中的 pid，无需陷入内核。
+
+2. vmprint
+- 按三级页表树格式输出，跳过无效 PTE。
+
+3. pgaccess
+- 支持最多 64 页的访问位扫描，返回位掩码并清除已访问位。
+
+三、结论
+本次修改完成了 Lab5 Page Tables 的核心要求，支持 ugetpid、页表打印和 pgaccess 功能。

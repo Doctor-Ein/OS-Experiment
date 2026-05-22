@@ -1,0 +1,16 @@
+Lab5: pgtbl 实验报告
+
+这次实验分三块：ugetpid、vmprint、pgaccess。整体感觉是“改动点不多，但都和页表细节强相关”，细节错一点就会翻车。
+
+1) ugetpid
+做法是在每个进程里分配一个 usyscall 共享页，把 pid 写进去，然后在用户页表里把 USYSCALL 映射成用户只读。这样 ugetpid 直接读内存，不用陷入内核。关键点是：要在 allocproc 里分配并初始化；在 freeproc 里释放；proc_pagetable 里映射；proc_freepagetable 里解除映射，避免泄漏。
+
+2) vmprint
+按三级页表树的格式打印，每层用 " .." 缩进。实现上递归遍历页表，遇到有效 PTE 就打印；如果是非叶子，就继续往下。最后在 exec 里对 pid==1 调一次，方便测试。
+
+3) pgaccess
+根据硬件 Accessed 位判断哪些页被访问。系统调用里拿 base/len/mask，逐页 walk 到 PTE，发现 PTE_A 就在掩码里置位并清除该位。拷贝掩码回用户态。为了简单，限制最多 64 页。
+
+测试结果：pgtbltest 全通过，grade-lab-pgtbl 一次跑通。✅
+
+本次实验涉及的主要文件：conf/lab.mk、kernel/proc.c、kernel/proc.h、kernel/vm.c、kernel/exec.c、kernel/defs.h、kernel/riscv.h、kernel/sysproc.c。
