@@ -26,6 +26,11 @@ struct kmem_cpu {
 static struct kmem_cpu kmem[NCPU];
 static char kmem_lock_names[NCPU][16];
 
+struct {
+  struct spinlock lock;
+  int count[PHYSTOP / PGSIZE];
+} ref;
+
 static void
 kmem_mkname(int id, char *buf, int sz)
 {
@@ -64,6 +69,7 @@ done:
 void
 kinit()
 {
+  initlock(&ref.lock, "kref");
   for(int i = 0; i < NCPU; i++){
     kmem_mkname(i, kmem_lock_names[i], sizeof(kmem_lock_names[i]));
     initlock(&kmem[i].lock, kmem_lock_names[i]);
@@ -76,8 +82,10 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE) {
+    ref.count[(uint64)p / PGSIZE] = 1;
     kfree(p);
+  }
 }
 
 // Free the page of physical memory pointed at by pa,
@@ -92,6 +100,16 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  acquire(&ref.lock);
+  if(ref.count[(uint64)pa / PGSIZE] <= 0)
+    panic("kfree_count");
+  ref.count[(uint64)pa / PGSIZE] -= 1;
+  if(ref.count[(uint64)pa / PGSIZE] > 0) {
+    release(&ref.lock);
+    return;
+  }
+  release(&ref.lock);
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -174,8 +192,10 @@ kalloc(void)
   }
 
 out:
-  if(r)
+  if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
+    ref.count[(uint64)r / PGSIZE] = 1;
+  }
   return (void*)r;
 }
 
@@ -194,4 +214,14 @@ freemem(void)
   }
 
   return n;
+}
+
+void
+kref_incr(void *pa)
+{
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+    panic("kref_incr");
+  acquire(&ref.lock);
+  ref.count[(uint64)pa / PGSIZE] += 1;
+  release(&ref.lock);
 }

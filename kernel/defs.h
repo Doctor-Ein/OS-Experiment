@@ -69,8 +69,9 @@ void            ramdiskrw(struct buf*);
 
 // kalloc.c
 void*           kalloc(void);
-void            kfree(void *);
+void            kfree(void*);
 void            kinit(void);
+void            kref_incr(void*);
 uint64          freemem(void);
 
 // log.c
@@ -187,9 +188,10 @@ void            uvmunmap(pagetable_t, uint64, uint64, int);
 void            uvmclear(pagetable_t, uint64);
 pte_t *         walk(pagetable_t, uint64, int);
 uint64          walkaddr(pagetable_t, uint64);
-int             copyout(pagetable_t, uint64, char *, uint64);
-int             copyin(pagetable_t, char *, uint64, uint64);
-int             copyinstr(pagetable_t, char *, uint64, uint64);
+int             copyout(pagetable_t, uint64, char*, uint64);
+int             copyin(pagetable_t, char*, uint64, uint64);
+int             copyinstr(pagetable_t, char*, uint64, uint64);
+int             cow_alloc(pagetable_t, uint64);
 #ifdef LAB_PGTBL
 void            vmprint(pagetable_t);
 #endif

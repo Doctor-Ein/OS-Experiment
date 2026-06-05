@@ -1,0 +1,50 @@
+Lab6: COW 实验报告
+
+本次实验实现了写时复制机制，优化了 fork 的内存开销。
+
+测试结果全部通过
+
+2. 代码改动
+
+页表与标记：
+- kernel/riscv.h
+	- 定义 PTE_COW (1L << 8)，利用 RISC-V 页表项中的保留位标记 COW 页。
+
+物理内存管理：
+- kernel/kalloc.c
+	- 新增 ref 结构体及 count 数组，记录每个物理页的引用计数。
+	- 修改 kinit、freerange、kalloc、kfree 以维护引用计数。
+	- 实现 kref_incr 用于手动增加引用（在 uvmcopy 时使用）。
+- kernel/defs.h
+	- 增加 kref_incr 和 cow_alloc 的内核声明。
+
+虚拟内存与陷阱处理：
+- kernel/vm.c
+	- 修改 uvmcopy：fork 时不再复制物理页，而是将父子进程的 PTE 设为只读并标记为 COW，同时增加引用计数。
+	- 实现 cow_alloc：处理 COW 页面分配的核心逻辑，包括分配新页、拷贝数据、更新 PTE 及释放旧页引用。
+	- 修改 copyout：确保内核在通过 copyout 写入 COW 页面时，也能正确触发写时复制逻辑。
+- kernel/trap.c
+	- 在 usertrap 中捕获 store page fault (scause 15)，调用 cow_alloc 进行处理。
+
+3. 主要实现思路
+
+一、引用计数：
+这是 COW 的基石。物理页不再属于某个单一进程，而是被多个进程共享。
+- 难点在于初始化：freerange 初始时调用 kfree 会导致计数减为 0 从而真正释放，因此在 freerange 中先将计数设为 1。
+- 规则：kalloc 时设为 1，kref_incr 增加，kfree 减少。只有计数到 0 时，kfree 才会真正把页面放回空闲链表。
+
+二、写时复制（COW）流程：
+1. Fork 阶段：eager copy 变 lazy copy。只拷页表，不拷物理内存。把 PTE_W 关掉，PTE_COW 打开。
+2. Fault 阶段：进程写页面时触发异常。内核检查该页是否有 PTE_COW 标记。
+3. Alloc 阶段：如果是 COW 页，分配新物理页，拷数据，把当前进程的 PTE 指向新页，打开 PTE_W 并关闭 PTE_COW。
+
+三、内核写入（copyout）：
+这是一个容易忽略的边界情况。内核调用 copyout（如 read 系统调用往用户缓冲区写数据）时，直接走的是内核映射，不会触发 CPU 的 page fault。因此必须在 copyout 软件逻辑里手动检查并调用 cow_alloc。
+
+4. 收获
+
+这个实验加深了我对“indirection”的理解。通过在虚拟地址和物理地址之间加一层 COW 标记，我们成功地欺骗了进程：它们以为自己拥有独立的内存，但实际上只有在真正需要修改时，系统才支付内存分配的代价。
+
+最深刻的教训是引用计数的同步和边界处理。一开始容易漏掉 copyout 的处理，导致系统调用写入时报错。操作系统中的“透明性”往往需要内核在多个入口点（陷阱处理、系统调用接口）进行周密的配合。
+
+COW 的本质是用“时间（异常处理开销）”换取“空间（内存利用率）”和“效率（fork 速度）”。在大多数 fork 后立即 exec 的场景下，这种权衡几乎是最好的优化。
