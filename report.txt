@@ -87,3 +87,51 @@ Lab5 实验记录（Page Tables）
 
 三、结论
 本次修改完成了 Lab5 Page Tables 的核心要求，支持 ugetpid、页表打印和 pgaccess 功能。
+
+---
+
+Lab7 实验记录（File System）
+
+一、修改内容
+1. conf/lab.mk
+- 将 `LAB` 设置为 `fs`，切换到文件系统实验配置。
+
+2. kernel/fs.h + kernel/file.h + kernel/fs.c
+- 将 `NDIRECT` 调整为 11。
+- 为 inode 地址数组保留 `11 direct + 1 single indirect + 1 double indirect`。
+- 新增 `NDINDIRECT` 和扩展后的 `MAXFILE`。
+- 在 `bmap()` 中实现 double indirect block 的映射和按需分配。
+- 在 `itrunc()` 中完整释放 single indirect 和 double indirect 相关块。
+
+3. kernel/stat.h + kernel/fcntl.h
+- 增加 `T_SYMLINK` 文件类型。
+- 增加 `O_NOFOLLOW` 打开标志。
+
+4. kernel/syscall.c + kernel/sysfile.c + user/usys.pl + user/user.h
+- 补齐 `symlink` 系统调用入口。
+- 实现 `sys_symlink()`，将目标路径写入 symlink inode 的数据块。
+- 修改 `sys_open()`，默认跟随符号链接，并在 `O_NOFOLLOW` 下返回链接本身。
+- 增加最多 10 层的解析深度，避免循环符号链接无限递归。
+
+5. Makefile + user/usertests.c
+- 在 fs 实验用户程序中加入 `symlinktest`。
+- 调整 `usertests` 中依赖 `MAXFILE` 的压力测试规模，使其在 large-file 版本下仍能稳定完成，并覆盖到 double indirect 的首个块。
+
+6. 文档
+- 新增 `lab-fs-report.txt` 作为评分脚本要求的实验报告。
+
+二、遇到的问题
+1. `MAXFILE` 扩大到 65803 后，`usertests` 里基于 `MAXFILE` 的循环会导致测试时间过长。
+2. `itrunc()` 很容易漏掉 double indirect 的中间索引块释放。
+3. `open()` 跟随符号链接时需要防止循环链接。
+
+三、解决方法
+1. 将 `usertests` 的相关压力规模限制为 `NDIRECT + NINDIRECT + 1`，既保留覆盖面，也控制运行时间。
+2. 在 `itrunc()` 中显式两层遍历并逐级释放：
+- 先释放二级数据块；
+- 再释放一级 indirect block；
+- 最后释放 doubly-indirect 根块。
+3. 在 `open()` 中设置最大解析深度 10，超过即报错返回。
+
+四、结论
+本次修改完成了 Lab7 File System 的两项核心任务：支持更大的文件，以及实现符号链接与 `O_NOFOLLOW` 语义，并补齐了实验所需测试程序与报告文件。

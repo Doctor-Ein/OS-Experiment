@@ -21,6 +21,8 @@
 
 char buf[BUFSZ];
 
+#define FSSTRESS_MAXFILE (NDIRECT + NINDIRECT + 1)
+
 //
 // Section with tests that run fairly quickly.  Use -q if you want to
 // run just those.  With -q usertests also runs the ones that take a
@@ -586,7 +588,7 @@ writebig(char *s)
     exit(1);
   }
 
-  for(i = 0; i < MAXFILE; i++){
+  for(i = 0; i < FSSTRESS_MAXFILE; i++){
     ((int*)buf)[0] = i;
     if(write(fd, buf, BSIZE) != BSIZE){
       printf("%s: error: write big file failed\n", s, i);
@@ -606,7 +608,7 @@ writebig(char *s)
   for(;;){
     i = read(fd, buf, BSIZE);
     if(i == 0){
-      if(n == MAXFILE - 1){
+      if(n == FSSTRESS_MAXFILE - 1){
         printf("%s: read only %d blocks from big", s, n);
         exit(1);
       }
@@ -2836,7 +2838,7 @@ diskfull(char *s)
       done = 1;
       break;
     }
-    for(int i = 0; i < MAXFILE; i++){
+    for(int i = 0; i < FSSTRESS_MAXFILE; i++){
       char buf[BSIZE];
       if(write(fd, buf, BSIZE) != BSIZE){
         done = 1;

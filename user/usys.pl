@@ -37,6 +37,7 @@ entry("trace");
 entry("sysinfo");
 entry("sigalarm");
 entry("sigreturn");
+entry("symlink");
 entry("sbrk");
 entry("sleep");
 entry("uptime");

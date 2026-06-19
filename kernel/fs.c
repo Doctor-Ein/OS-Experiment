@@ -25,6 +25,7 @@
 // there should be one superblock per disk device, but we run with
 // only one device
 struct superblock sb; 
+static uint balloc_start;
 
 // Read the super block.
 static void
@@ -65,23 +66,31 @@ bzero(int dev, int bno)
 static uint
 balloc(uint dev)
 {
-  int b, bi, m;
+  int bi, m, pass;
+  uint b, begin, end;
   struct buf *bp;
 
-  bp = 0;
-  for(b = 0; b < sb.size; b += BPB){
-    bp = bread(dev, BBLOCK(b, sb));
-    for(bi = 0; bi < BPB && b + bi < sb.size; bi++){
-      m = 1 << (bi % 8);
-      if((bp->data[bi/8] & m) == 0){  // Is block free?
-        bp->data[bi/8] |= m;  // Mark block in use.
-        log_write(bp);
-        brelse(bp);
-        bzero(dev, b + bi);
-        return b + bi;
+  if(balloc_start >= sb.size)
+    balloc_start = 0;
+
+  for(pass = 0; pass < 2; pass++){
+    begin = pass == 0 ? balloc_start : 0;
+    end = pass == 0 ? sb.size : balloc_start;
+    for(b = (begin / BPB) * BPB; b < end; b += BPB){
+      bp = bread(dev, BBLOCK(b, sb));
+      for(bi = (b < begin ? begin - b : 0); bi < BPB && b + bi < end; bi++){
+        m = 1 << (bi % 8);
+        if((bp->data[bi/8] & m) == 0){  // Is block free?
+          bp->data[bi/8] |= m;  // Mark block in use.
+          log_write(bp);
+          brelse(bp);
+          balloc_start = b + bi + 1;
+          bzero(dev, b + bi);
+          return b + bi;
+        }
       }
+      brelse(bp);
     }
-    brelse(bp);
   }
   printf("balloc: out of blocks\n");
   return 0;
@@ -373,8 +382,10 @@ iunlockput(struct inode *ip)
 //
 // The content (data) associated with each inode is stored
 // in blocks on the disk. The first NDIRECT block numbers
-// are listed in ip->addrs[].  The next NINDIRECT blocks are
-// listed in block ip->addrs[NDIRECT].
+// are listed in ip->addrs[]. The next NINDIRECT blocks are
+// listed in block ip->addrs[NDIRECT]. The remaining blocks
+// are reached through a doubly-indirect block stored in
+// ip->addrs[NDIRECT+1].
 
 // Return the disk block address of the nth block in inode ip.
 // If there is no such block, bmap allocates one.
@@ -382,7 +393,8 @@ iunlockput(struct inode *ip)
 static uint
 bmap(struct inode *ip, uint bn)
 {
-  uint addr, *a;
+  uint addr, indirect_addr, *a;
+  uint first, second;
   struct buf *bp;
 
   if(bn < NDIRECT){
@@ -416,6 +428,45 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  bn -= NINDIRECT;
+
+  if(bn < NDINDIRECT){
+    if((addr = ip->addrs[NDIRECT + 1]) == 0){
+      addr = balloc(ip->dev);
+      if(addr == 0)
+        return 0;
+      ip->addrs[NDIRECT + 1] = addr;
+    }
+
+    first = bn / NINDIRECT;
+    second = bn % NINDIRECT;
+
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a = (uint*)bp->data;
+    if((indirect_addr = a[first]) == 0){
+      indirect_addr = balloc(ip->dev);
+      if(indirect_addr){
+        a[first] = indirect_addr;
+        log_write(bp);
+      }
+    }
+    brelse(bp);
+    if(indirect_addr == 0)
+      return 0;
+
+    bp = bread(ip->dev, indirect_addr);
+    a = (uint*)bp->data;
+    if((addr = a[second]) == 0){
+      addr = balloc(ip->dev);
+      if(addr){
+        a[second] = addr;
+        log_write(bp);
+      }
+    }
+    brelse(bp);
+    return addr;
+  }
+
   panic("bmap: out of range");
 }
 
@@ -425,8 +476,8 @@ void
 itrunc(struct inode *ip)
 {
   int i, j;
-  struct buf *bp;
-  uint *a;
+  struct buf *bp, *bp2;
+  uint *a, *a2;
 
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
@@ -445,6 +496,26 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  if(ip->addrs[NDIRECT + 1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a = (uint*)bp->data;
+    for(i = 0; i < NINDIRECT; i++){
+      if(a[i]){
+        bp2 = bread(ip->dev, a[i]);
+        a2 = (uint*)bp2->data;
+        for(j = 0; j < NINDIRECT; j++){
+          if(a2[j])
+            bfree(ip->dev, a2[j]);
+        }
+        brelse(bp2);
+        bfree(ip->dev, a[i]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
   }
   
   ip->size = 0;

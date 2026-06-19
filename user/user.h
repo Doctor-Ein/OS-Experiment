@@ -28,6 +28,7 @@ int trace(int);
 int sysinfo(struct sysinfo *);
 int sigalarm(int ticks, void (*handler)());
 int sigreturn(void);
+int symlink(const char*, const char*);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
