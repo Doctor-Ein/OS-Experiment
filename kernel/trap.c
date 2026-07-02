@@ -65,10 +65,18 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if(r_scause() == 15){
-    // store page fault
-    if(cow_alloc(p->pagetable, r_stval()) < 0)
+  } else if(r_scause() == 13 || r_scause() == 15){
+    uint64 stval = r_stval();
+
+    if(r_scause() == 15 && cow_alloc(p->pagetable, stval) == 0){
+      // handled copy-on-write fault
+    } else if(mmap_handle_pagefault(p, stval, r_scause()) == 0){
+      // handled lazy mmap fault
+    } else {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), stval);
       setkilled(p);
+    }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
@@ -231,4 +239,3 @@ devintr()
     return 0;
   }
 }
-

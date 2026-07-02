@@ -122,6 +122,9 @@ exec(char *path, char **argv)
     
   // Commit to the user image.
   oldpagetable = p->pagetable;
+#ifdef LAB_MMAP
+  proc_freevmas(p);
+#endif
   p->pagetable = pagetable;
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main

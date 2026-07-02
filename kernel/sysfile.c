@@ -51,6 +51,18 @@ fdalloc(struct file *f)
   return -1;
 }
 
+#ifdef LAB_MMAP
+static struct vma*
+freevma(struct proc *p)
+{
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].valid == 0)
+      return &p->vmas[i];
+  }
+  return 0;
+}
+#endif
+
 uint64
 sys_dup(void)
 {
@@ -328,6 +340,82 @@ sys_symlink(void)
   end_op();
   return 0;
 }
+
+#ifdef LAB_MMAP
+uint64
+sys_mmap(void)
+{
+  uint64 addr, offset, mapaddr;
+  int length, prot, flags;
+  struct file *f;
+  struct proc *p = myproc();
+  struct vma *v;
+
+  argaddr(0, &addr);
+  argint(1, &length);
+  argint(2, &prot);
+  argint(3, &flags);
+  if(argfd(4, 0, &f) < 0)
+    return -1;
+  argaddr(5, &offset);
+
+  if(addr != 0 || offset != 0 || length <= 0)
+    return -1;
+  if((prot & ~(PROT_READ | PROT_WRITE)) != 0 || prot == 0)
+    return -1;
+  if(flags != MAP_SHARED && flags != MAP_PRIVATE)
+    return -1;
+  if(f->type != FD_INODE || f->readable == 0)
+    return -1;
+  if((flags & MAP_SHARED) && (prot & PROT_WRITE) && f->writable == 0)
+    return -1;
+
+  length = PGROUNDUP(length);
+  if((v = freevma(p)) == 0)
+    return -1;
+  if(p->mmapbase < length)
+    return -1;
+
+  mapaddr = PGROUNDDOWN(p->mmapbase - length);
+  if(mapaddr < PGROUNDUP(p->sz))
+    return -1;
+
+  v->valid = 1;
+  v->addr = mapaddr;
+  v->length = length;
+  v->prot = prot;
+  v->flags = flags;
+  v->offset = offset;
+  v->f = filedup(f);
+  p->mmapbase = mapaddr;
+  return mapaddr;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  int length;
+
+  argaddr(0, &addr);
+  argint(1, &length);
+  if(length <= 0)
+    return -1;
+  return proc_munmap(myproc(), addr, length);
+}
+#else
+uint64
+sys_mmap(void)
+{
+  return -1;
+}
+
+uint64
+sys_munmap(void)
+{
+  return -1;
+}
+#endif
 
 uint64
 sys_open(void)

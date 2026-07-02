@@ -85,6 +85,20 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+#ifdef LAB_MMAP
+#define NVMA 16
+
+struct vma {
+  int valid;
+  uint64 addr;
+  uint64 length;
+  int prot;
+  int flags;
+  uint64 offset;
+  struct file *f;
+};
+#endif
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -116,5 +130,9 @@ struct proc {
   uint64 alarm_handler;        // User handler PC
   int alarm_active;            // Prevent re-entrant handler execution
   struct trapframe alarm_tf;   // Saved user context before handler
+#ifdef LAB_MMAP
+  uint64 mmapbase;             // Next high address to try for mmap
+  struct vma vmas[NVMA];       // Memory mapped regions
+#endif
   char name[16];               // Process name (debugging)
 };

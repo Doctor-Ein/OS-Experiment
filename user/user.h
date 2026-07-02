@@ -29,6 +29,10 @@ int sysinfo(struct sysinfo *);
 int sigalarm(int ticks, void (*handler)());
 int sigreturn(void);
 int symlink(const char*, const char*);
+#ifdef LAB_MMAP
+void *mmap(void *, size_t, int, int, int, off_t);
+int munmap(void *, size_t);
+#endif
 char* sbrk(int);
 int sleep(int);
 int uptime(void);

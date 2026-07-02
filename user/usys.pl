@@ -38,6 +38,8 @@ entry("sysinfo");
 entry("sigalarm");
 entry("sigreturn");
 entry("symlink");
+entry("mmap");
+entry("munmap");
 entry("sbrk");
 entry("sleep");
 entry("uptime");

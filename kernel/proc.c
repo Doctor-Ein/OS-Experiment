@@ -3,8 +3,12 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "spinlock.h"
+#include "sleeplock.h"
+#include "fs.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
+#include "file.h"
 
 struct cpu cpus[NCPU];
 
@@ -25,6 +29,67 @@ extern char trampoline[]; // trampoline.S
 // memory model when using p->parent.
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
+
+#ifdef LAB_MMAP
+#define MMAP_TOP TRAPFRAME
+
+static struct vma*
+findvma(struct proc *p, uint64 va)
+{
+  for(int i = 0; i < NVMA; i++){
+    struct vma *v = &p->vmas[i];
+    if(v->valid && v->addr <= va && va < v->addr + v->length)
+      return v;
+  }
+  return 0;
+}
+
+static void
+recalcmmapbase(struct proc *p)
+{
+  uint64 base = MMAP_TOP;
+
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].valid && p->vmas[i].addr < base)
+      base = p->vmas[i].addr;
+  }
+  p->mmapbase = base;
+}
+
+static int
+vmaunmappage(struct proc *p, struct vma *v, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa, fileoff;
+  uint n;
+
+  pte = walk(p->pagetable, va, 0);
+  if(pte == 0 || (*pte & PTE_V) == 0 || PTE_FLAGS(*pte) == PTE_V)
+    return 0;
+
+  pa = PTE2PA(*pte);
+  if((v->flags & MAP_SHARED) && (v->prot & PROT_WRITE)){
+    fileoff = v->offset + (va - v->addr);
+    n = PGSIZE;
+    if(fileoff + n > v->offset + v->length)
+      n = v->offset + v->length - fileoff;
+    if(n > 0){
+      begin_op();
+      ilock(v->f->ip);
+      if(writei(v->f->ip, 0, pa, fileoff, n) != n){
+        iunlock(v->f->ip);
+        end_op();
+        return -1;
+      }
+      iunlock(v->f->ip);
+      end_op();
+    }
+  }
+
+  uvmunmap(p->pagetable, va, 1, 1);
+  return 0;
+}
+#endif
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
@@ -130,6 +195,10 @@ found:
   p->alarm_handler = 0;
   p->alarm_active = 0;
   memset(&p->alarm_tf, 0, sizeof(p->alarm_tf));
+#ifdef LAB_MMAP
+  p->mmapbase = MMAP_TOP;
+  memset(p->vmas, 0, sizeof(p->vmas));
+#endif
 #ifdef LAB_PGTBL
   p->usyscall = 0;
 #endif
@@ -174,6 +243,9 @@ found:
 static void
 freeproc(struct proc *p)
 {
+#ifdef LAB_MMAP
+  proc_freevmas(p);
+#endif
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
@@ -198,6 +270,10 @@ freeproc(struct proc *p)
   p->alarm_handler = 0;
   p->alarm_active = 0;
   memset(&p->alarm_tf, 0, sizeof(p->alarm_tf));
+#ifdef LAB_MMAP
+  p->mmapbase = 0;
+  memset(p->vmas, 0, sizeof(p->vmas));
+#endif
   p->state = UNUSED;
 }
 
@@ -352,6 +428,16 @@ fork(void)
   np->alarm_handler = p->alarm_handler;
   np->alarm_active = 0;
   memset(&np->alarm_tf, 0, sizeof(np->alarm_tf));
+#ifdef LAB_MMAP
+  np->mmapbase = p->mmapbase;
+  memset(np->vmas, 0, sizeof(np->vmas));
+  for(i = 0; i < NVMA; i++){
+    if(p->vmas[i].valid){
+      np->vmas[i] = p->vmas[i];
+      np->vmas[i].f = filedup(p->vmas[i].f);
+    }
+  }
+#endif
 
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
@@ -410,6 +496,10 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+
+#ifdef LAB_MMAP
+  proc_freevmas(p);
+#endif
 
   begin_op();
   iput(p->cwd);
@@ -752,4 +842,116 @@ nproc(void)
   }
 
   return n;
+}
+
+int
+mmap_handle_pagefault(struct proc *p, uint64 va, int cause)
+{
+#ifdef LAB_MMAP
+  struct vma *v;
+  char *mem;
+  uint64 a, fileoff;
+  uint n;
+  int perm;
+
+  a = PGROUNDDOWN(va);
+  if(a >= MMAP_TOP)
+    return -1;
+  if((v = findvma(p, a)) == 0)
+    return -1;
+  if(cause == 13 && (v->prot & PROT_READ) == 0)
+    return -1;
+  if(cause == 15 && (v->prot & PROT_WRITE) == 0)
+    return -1;
+
+  mem = kalloc();
+  if(mem == 0)
+    return -1;
+  memset(mem, 0, PGSIZE);
+
+  fileoff = v->offset + (a - v->addr);
+  n = 0;
+  ilock(v->f->ip);
+  if(fileoff < v->f->ip->size){
+    n = v->f->ip->size - fileoff;
+    if(n > PGSIZE)
+      n = PGSIZE;
+    if(readi(v->f->ip, 0, (uint64)mem, fileoff, n) != n){
+      iunlock(v->f->ip);
+      kfree(mem);
+      return -1;
+    }
+  }
+  iunlock(v->f->ip);
+
+  perm = PTE_U;
+  if(v->prot & PROT_READ)
+    perm |= PTE_R;
+  if(v->prot & PROT_WRITE)
+    perm |= PTE_R | PTE_W;
+
+  if(mappages(p->pagetable, a, PGSIZE, (uint64)mem, perm) < 0){
+    kfree(mem);
+    return -1;
+  }
+  return 0;
+#else
+  return -1;
+#endif
+}
+
+int
+proc_munmap(struct proc *p, uint64 addr, uint64 length)
+{
+#ifdef LAB_MMAP
+  struct vma *v;
+  uint64 end;
+
+  if(length == 0 || (addr % PGSIZE) != 0)
+    return -1;
+  length = PGROUNDUP(length);
+  end = addr + length;
+  if(end < addr)
+    return -1;
+
+  if((v = findvma(p, addr)) == 0)
+    return -1;
+  if(end > v->addr + v->length)
+    return -1;
+  if(addr != v->addr && end != v->addr + v->length)
+    return -1;
+
+  for(uint64 a = addr; a < end; a += PGSIZE){
+    if(vmaunmappage(p, v, a) < 0)
+      return -1;
+  }
+
+  if(addr == v->addr && length == v->length){
+    fileclose(v->f);
+    memset(v, 0, sizeof(*v));
+  } else if(addr == v->addr){
+    v->addr += length;
+    v->offset += length;
+    v->length -= length;
+  } else {
+    v->length -= length;
+  }
+
+  recalcmmapbase(p);
+  return 0;
+#else
+  return -1;
+#endif
+}
+
+void
+proc_freevmas(struct proc *p)
+{
+#ifdef LAB_MMAP
+  for(int i = 0; i < NVMA; i++){
+    if(p->vmas[i].valid)
+      proc_munmap(p, p->vmas[i].addr, p->vmas[i].length);
+  }
+  p->mmapbase = MMAP_TOP;
+#endif
 }
